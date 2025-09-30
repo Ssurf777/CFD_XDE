@@ -90,7 +90,7 @@ model = dde.Model(data_pde, net)
 from deepxde.callbacks import EarlyStopping, ModelCheckpoint
 
 early_stopping = EarlyStopping(
-    monitor="loss",
+    monitor="loss_train",
     patience=5000,
     min_delta=1e-6,
 )
@@ -98,7 +98,7 @@ early_stopping = EarlyStopping(
 ckpt = ModelCheckpoint(
     filepath="artifacts/dde_model",  # DeepXDE が拡張子を付けて保存
     save_better_only=True,
-    monitor="loss",
+    monitor="loss_train",
 )
 
 model.compile("adam", lr=1e-3, loss_weights=[1.0, 1.0] + [1.0] * len(bcs))
