@@ -2,6 +2,12 @@
 import os, json
 import numpy as np
 import deepxde as dde
+from deepxde.callbacks import EarlyStopping, ModelCheckpoint
+import os
+from glob import glob
+import torch
+os.makedirs("artifacts", exist_ok=True)
+
 
 # --- Force PyTorch backend ---
 dde.backend.set_default_backend("pytorch")
@@ -87,13 +93,11 @@ early_stopping = EarlyStopping(
     monitor="loss",
     patience=5000,
     min_delta=1e-6,
-    restore_best=True,
 )
 
 ckpt = ModelCheckpoint(
-    filepath="artifacts/dde_model",
+    filepath="artifacts/dde_model",  # DeepXDE が拡張子を付けて保存
     save_better_only=True,
-    period=1000,
     monitor="loss",
 )
 
