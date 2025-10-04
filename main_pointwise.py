@@ -9,9 +9,6 @@ import deepxde as dde
 dde.backend.set_default_backend("pytorch")
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-
 
 # ---- Local utilities ----
 from utils.user_define_function import (
@@ -51,7 +48,8 @@ def load_cfd_dataset():
         return data_np
 
     raise FileNotFoundError("No data found. Put .npy files into ./data_npy or place ./cfd_data.npy.")
-# --- pointwise conv. ---    
+
+# --- pointwise conv. ---
 class PointNetConvBlock(nn.Module):
     """Pointwise Conv (1x1) + SiLU"""
     def __init__(self, in_channels, out_channels):
@@ -60,13 +58,14 @@ class PointNetConvBlock(nn.Module):
         self.act = nn.SiLU()
 
     def forward(self, x):
-        # x: (B, in_channels, N)   ← N点を扱う
+        # x: (B, in_channels, N)   ← handling N points
         return self.act(self.conv(x))  # (B, out_channels, N)
-
 
 class PointNetLike(nn.Module):
     def __init__(self, in_dim=4, out_dim=4):
         super().__init__()
+        self.regularizer = None
+
         # Pointwise conv layers
         self.feat = nn.Sequential(
             PointNetConvBlock(in_dim, 64),
@@ -82,8 +81,8 @@ class PointNetLike(nn.Module):
 
     def forward(self, x):
         """
-        x: (N, in_dim) または (B, N, in_dim)
-        DeepXDE からは (batch_size, in_dim) で来るので reshape が必要
+        x: (N, in_dim) or (B, N, in_dim)
+        From DeepXDE, input comes as (batch_size, in_dim), so reshape is needed.
         """
         if x.ndim == 2:
             # (N, in_dim) → (1, in_dim, N)
@@ -93,10 +92,10 @@ class PointNetLike(nn.Module):
             x = x.transpose(1, 2)
 
         # Pointwise conv
-        f_local = self.feat(x)             # (B, C, N)
+        f_local = self.feat(x)               # (B, C, N)
         f_global = torch.max(f_local, 2)[0]  # (B, C)
 
-        # 各点にブロードキャストして局所特徴と結合
+        # Broadcast global features and concatenate with local features
         f_global_expand = f_global.unsqueeze(-1).expand(-1, -1, f_local.shape[2])  # (B, C, N)
         f = torch.cat([f_local, f_global_expand], dim=1)  # (B, 2C, N)
 
@@ -104,9 +103,6 @@ class PointNetLike(nn.Module):
         f = f.transpose(1, 2).reshape(-1, f.shape[1])
         y = self.head(f)  # (B*N, out_dim)
         return y
-
-
-
 
 def main():
     # ---------- Load & scale ----------
@@ -143,16 +139,8 @@ def main():
     geom = PointCloudGeometry(ob_xyz, tol=1e-5)
 
     # ---------- Network ----------
-    
-    net = PointNetLikeRegressor(
-        in_dim=4,
-        out_dim=4,
-        local_widths=(128, 128, 128),
-        head_widths=(256, 128),
-        use_global_context=False,  # ← まずはFalse（混在バッチでも安全）
-        initializer="he",
-    )
-    model = dde.Model(data, net)
+    net = PointNetLike(in_dim=4, out_dim=4)
+
     # ---------- DeepXDE data/model ----------
     data_pde = dde.data.PDE(
         geom,
@@ -165,7 +153,11 @@ def main():
 
     # ---------- Compile & Train (NO callbacks) ----------
     print("Compiling model...")
-    model.compile("adam", lr=1e-3, loss_weights=[1.0, 1.0] + [1.0] * len(bcs))
+    model.compile("adam", lr=1e-3)
+    _ = model.train(iterations=1, display_every=1, disregard_previous_best=True)
+    num_losses = len(model.losshistory.loss_train[-1])
+    w = [1e-3, 1.0] + [1.0] * (num_losses - 2)
+    model.compile("adam", lr=1e-3, loss_weights=w)
     print("\nTraining model (no callbacks)...")
     losshistory, train_state = model.train(
         iterations=50000,
@@ -181,9 +173,6 @@ def main():
 
     # Save minimal model config (for later reconstruction)
     config = {
-        "layer_size": layer_size,
-        "activation": activation,
-        "initializer": initializer,
         "backend": "pytorch",
         "features": features,
     }
